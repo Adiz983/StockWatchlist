@@ -1,27 +1,32 @@
+<<<<<<< HEAD
 # StockWatchlist
 <<<<<<< HEAD
 Using python to track stocks, display pricing, and calculate price changes.
 =======
+=======
+# Stock Watchlist
+>>>>>>> ae94caf (Resolve merge conflict in README.md)
 
-A simple stock watchlist application built from scratch.
+This is a simple stock watchlist application built with Python and yfinance library.
 
 ## Features
-- View a list of stock tickers.
-- Add and remove stocks from your watchlist.
-- Fetch real-time stock data for each ticker.
+- Add and remove stocks from the watchlist
+- Save and load the watchlist to a local JSON file
 
-## Setup
-1. Clone the repository:
+## How to Run
+1. Clone this repository:
    ```sh
-   git clone https://github.com/your-username/StockWatchlist.git
-   cd StockWatchlist
-
-## Install dependencies:
+   git clone https://github.com/Adiz983/StockWatchlist.git
+Navigate to the project folder:
 sh
-py -m pip install yfinance
-
-## Running the Application
+cd StockWatchlist
+Install the required dependencies:
+sh
+pip install yfinance
+Run the application:
+sh
 py main.py
+<<<<<<< HEAD
 
 ## Contributing
 Contributions are welcome! Please open an issue or submit a pull request.
@@ -49,3 +54,7 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 >>>>>>> b34e1ee (Add save and load watchlist functionality)
+=======
+License
+This project is licensed under the MIT License - see the LICENSE file for details.
+>>>>>>> ae94caf (Resolve merge conflict in README.md)
