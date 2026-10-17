@@ -17,6 +17,7 @@ This is a simple stock watchlist application built with Python and yfinance libr
 1. Clone this repository:
    ```sh
    git clone https://github.com/Adiz983/StockWatchlist.git
+<<<<<<< HEAD
 Navigate to the project folder:
 sh
 cd StockWatchlist
@@ -56,5 +57,13 @@ SOFTWARE.
 >>>>>>> b34e1ee (Add save and load watchlist functionality)
 =======
 License
+=======
+   
+    cd StockWatchlist
+    pip install yfinance
+    py main.py
+
+## License
+>>>>>>> 7889442 (Commit your local changes before pulling)
 This project is licensed under the MIT License - see the LICENSE file for details.
 >>>>>>> ae94caf (Resolve merge conflict in README.md)
