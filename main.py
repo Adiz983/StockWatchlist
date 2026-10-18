@@ -3,7 +3,7 @@ import yfinance as yf
 import json
 
 
-# Load the watchlist from a JSON file
+# Load the watchlist 
 def load_watchlist():
     try:
         with open("watchlist.json", "r") as f:
@@ -32,12 +32,12 @@ def save_watchlist(watchlist):
         print(f"Could not save watchlist: {e}")
 
 
-# Fetch stock data using yfinance
+# stock data using yfinance
 def get_stock_data(ticker):
     try:
         stock = yf.Ticker(ticker)
 
-        # Retrieve up to five days of daily price history
+        #  up to five days of daily price history
         history = stock.history(period="5d")
 
         if history.empty or len(history) < 2:
