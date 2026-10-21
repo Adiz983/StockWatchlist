@@ -1,14 +1,25 @@
-# Python cache files
-__pycache__/
 
-# Virtual environments
+# Python
+__pycache__/
+*.py[cod]
 .venv/
 venv/
 
-# Build artifacts
+# Secrets
+.env
+.env.*
+!.env.example
+
+# Local portfolio data
+portfolio.json
+watchlist.json
+
+# Editor and operating system files
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Build files
 build/
 dist/
-*.egg-info/
-
-# VS Code files
-.vscode/
+*.spec
