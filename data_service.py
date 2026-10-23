@@ -41,9 +41,9 @@ def clear_cache(symbol: str | None = None):
                 del _cache[key]
 
 
-# --------------------------------------------------------------------------
+
 # Watchlist quotes
-# --------------------------------------------------------------------------
+
 @dataclass
 class Quote:
     symbol: str
@@ -78,7 +78,7 @@ def fetch_quote(symbol: str) -> Quote:
         fast = ticker.fast_info
         price = _finite(getattr(fast, "last_price", None))
         prev = _finite(getattr(fast, "previous_close", None))
-    except Exception as error:  # noqa: BLE001 - any failure -> fall back
+    except Exception as error:  
         last_error = error
 
     if price is None or prev is None:
@@ -100,10 +100,10 @@ def fetch_quote(symbol: str) -> Quote:
     return Quote(symbol, price=price, prev_close=prev, change=change, pct=pct)
 
 
-# --------------------------------------------------------------------------
+
 # Price history + info
-# --------------------------------------------------------------------------
-def get_history(symbol: str, force=False) -> pd.DataFrame:
+
+
     """Full daily history. Fetched once and sliced per period in the UI, so
     changing the period is instant and indicators have proper warm-up data."""
 
@@ -120,7 +120,7 @@ def get_info(symbol: str, force=False) -> dict:
     def load():
         try:
             return yf.Ticker(symbol).info or {}
-        except Exception:  # noqa: BLE001 - info is optional; history is what matters
+        except Exception:  
             return {}
 
     return _cached(("info", symbol), load, force)
@@ -135,7 +135,7 @@ def load_research_bundle(symbol: str, benchmark: str, force=False) -> dict:
     if benchmark and benchmark != symbol:
         try:
             bench_close = get_history(benchmark, force)["Close"]
-        except Exception as error:  # noqa: BLE001
+        except Exception as error: 
             bench_error = str(error)
     return {
         "symbol": symbol,
@@ -147,9 +147,9 @@ def load_research_bundle(symbol: str, benchmark: str, force=False) -> dict:
     }
 
 
-# --------------------------------------------------------------------------
+
 # Fundamentals
-# --------------------------------------------------------------------------
+
 _STATEMENT_ATTRS = {
     "annual": {"income": "income_stmt", "balance": "balance_sheet", "cashflow": "cashflow"},
     "quarterly": {"income": "quarterly_income_stmt", "balance": "quarterly_balance_sheet",
@@ -171,7 +171,7 @@ def load_fundamentals(symbol: str, force=False) -> dict:
             for kind, attr in mapping.items():
                 try:
                     out[freq][kind] = analysis.clean_statement(getattr(ticker, attr))
-                except Exception as error:  # noqa: BLE001
+                except Exception as error: 
                     out[freq][kind] = pd.DataFrame()
                     out["errors"].append(f"{freq} {kind}: {error}")
         return out
@@ -186,7 +186,7 @@ def dividend_yield_percent(info: dict) -> float | None:
     price = _finite(info.get("currentPrice")) or _finite(info.get("regularMarketPrice"))
     if rate is not None and price:
         return rate / price * 100.0
-    trailing = _finite(info.get("trailingAnnualDividendYield"))  # always a fraction
+    trailing = _finite(info.get("trailingAnnualDividendYield")) 
     if trailing is not None:
         return trailing * 100.0
     return None
