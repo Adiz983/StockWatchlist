@@ -11,9 +11,9 @@ PERIODS = ["1mo", "3mo", "6mo", "ytd", "1y", "2y", "5y", "max"]
 MA_WINDOWS = (20, 50, 200)
 
 
-# --------------------------------------------------------------------------
+
 # Indicators
-# --------------------------------------------------------------------------
+
 def sma(close: pd.Series, window: int) -> pd.Series:
     return close.rolling(window, min_periods=window).mean()
 
@@ -31,7 +31,7 @@ def rsi(close: pd.Series, window: int = 14) -> pd.Series:
     delta = np.diff(values)
     gain = np.where(delta > 0, delta, 0.0)
     loss = np.where(delta < 0, -delta, 0.0)
-    # Wilder smoothing, seeded with a simple average of the first `window` moves.
+
     avg_gain = gain[:window].mean()
     avg_loss = loss[:window].mean()
 
@@ -70,9 +70,9 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-# --------------------------------------------------------------------------
+
 # Period slicing / relative performance
-# --------------------------------------------------------------------------
+
 def slice_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
     if df is None or df.empty or period == "max":
         return df
@@ -92,7 +92,7 @@ def align_benchmark(stock_index: pd.Index, bench_close: pd.Series | None) -> pd.
     if bench_close is None or bench_close.empty:
         return None
     b = bench_close.copy()
-    # Normalise tz so the two indexes are comparable.
+
     if getattr(stock_index, "tz", None) is not None and b.index.tz is None:
         b.index = b.index.tz_localize(stock_index.tz)
     elif getattr(stock_index, "tz", None) is None and b.index.tz is not None:
@@ -158,9 +158,8 @@ def trailing_returns(close: pd.Series, bench: pd.Series | None, selected_period:
     return rows
 
 
-# --------------------------------------------------------------------------
-# Plain-language signal snapshot (descriptive only, not advice)
-# --------------------------------------------------------------------------
+
+
 def technical_snapshot(df: pd.DataFrame):
     """List of (label, text, tone) where tone is 'up', 'down' or 'flat'."""
     rows = []
@@ -183,7 +182,7 @@ def technical_snapshot(df: pd.DataFrame):
     m, s, h = last.get("MACD"), last.get("MACD_SIGNAL"), last.get("MACD_HIST")
     if pd.notna(m) and pd.notna(s):
         state = "above signal  ·  bullish momentum" if h >= 0 else "below signal  ·  bearish momentum"
-        # Detect a fresh cross within the last 5 sessions.
+
         hist = df["MACD_HIST"].dropna().tail(6)
         if len(hist) >= 2 and (np.sign(hist.iloc[:-1]) != np.sign(hist.iloc[-1])).any():
             state += "  ·  recent cross"
@@ -210,9 +209,9 @@ def technical_snapshot(df: pd.DataFrame):
     return rows
 
 
-# --------------------------------------------------------------------------
+
 # Financial statements
-# --------------------------------------------------------------------------
+
 KEY_ROWS = {
     "income": ["Total Revenue", "Cost Of Revenue", "Gross Profit", "Operating Expense",
                "Operating Income", "EBITDA", "Pretax Income", "Tax Provision",
@@ -279,7 +278,7 @@ def statement_table(df: pd.DataFrame, kind: str, show_all: bool, quarterly: bool
     """
     if df is None or df.empty:
         return [], []
-    cols = list(reversed(list(df.columns)))  # newest first for reading
+    cols = list(reversed(list(df.columns)))  
     rows = []
     if show_all:
         labels = list(df.index)
