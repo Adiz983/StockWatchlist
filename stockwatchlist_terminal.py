@@ -20,13 +20,13 @@ from PySide6.QtWidgets import (
 
 PROJECT_DIR = Path(__file__).resolve().parent
 os.chdir(PROJECT_DIR)
-import main as core  # noqa: E402  
-import analysis  # noqa: E402
-import data_service as ds  # noqa: E402
+import watchlist_core as core  
+import analysis  
+import data_service as ds  
 
 SETTINGS_FILE = PROJECT_DIR / "terminal_settings.json"
 
-# Color
+
 BG = "#080A0D"
 PANEL = "#0D1117"
 PANEL2 = "#111821"
@@ -44,7 +44,7 @@ MAX_CANDLES = 1500
 QUOTE_REFRESH_MS = 60_000
 DEFAULT_BENCHMARK = "SPY"
 
-# name 
+
 LAYOUTS = {
     "RESEARCH · 5 PANELS": {
         "cells": [("PRICE", 0, 0, 2, 1), ("RELATIVE", 0, 1, 1, 1), ("VOLUME", 1, 1, 1, 1),
@@ -172,8 +172,8 @@ def tone_color(tone):
 # Background work
 
 class WorkerSignals(QObject):
-    done = Signal(object, object)    
-    failed = Signal(object, str)     
+    done = Signal(object, object)    # token, result
+    failed = Signal(object, str)     # token, message
 
 
 class Worker(QRunnable):
@@ -183,19 +183,19 @@ class Worker(QRunnable):
         super().__init__()
         self.fn, self.args, self.token = fn, args, token
         self.signals = WorkerSignals()
-        self.setAutoDelete(False)  
+        self.setAutoDelete(False)  # the window holds the reference until the result lands
 
     def run(self):
         try:
             result = self.fn(*self.args)
-        except Exception as error:  
+        except Exception as error:  # noqa: BLE001 - surfaced to the UI
             self.signals.failed.emit(self.token, str(error))
             return
         self.signals.done.emit(self.token, result)
 
 
 
-# Chart building blocks
+# Chart
 
 class IndexDateAxis(pg.AxisItem):
     """Bottom axis for charts plotted by bar index; labels show session dates,
@@ -290,7 +290,7 @@ def style_chart(chart):
 def add_legend(chart):
     try:
         return chart.addLegend(offset=(8, 6), labelTextColor=TEXT)
-    except TypeError:  # older pyqtgraph without labelTextColor
+    except TypeError:  
         return chart.addLegend(offset=(8, 6))
 
 
@@ -306,7 +306,7 @@ class ChartPanel(TerminalPanel):
     """One cell of the chart grid. The dropdown picks what it displays."""
 
     kind_changed = Signal(object)   
-    hovered = Signal(int)        
+    hovered = Signal(int)           
 
     def __init__(self, kind):
         super().__init__(KIND_LABELS[kind])
@@ -324,7 +324,7 @@ class ChartPanel(TerminalPanel):
         self.axis = IndexDateAxis(orientation="bottom")
         self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
         style_chart(self.plot)
-        self.plot.getAxis("left").setWidth(62)   # keeps stacked panels visually aligned
+        self.plot.getAxis("left").setWidth(62)   
         add_legend(self.plot)
         self.vline = pg.InfiniteLine(angle=90, movable=False,
                                      pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
@@ -342,8 +342,8 @@ class ChartPanel(TerminalPanel):
         if vb.sceneBoundingRect().contains(pos):
             self.hovered.emit(int(round(vb.mapSceneToView(pos).x())))
 
-    # rendering
-    def render(self, ctx): 
+    #  rendering 
+    def render(self, ctx):
         plot = self.plot
         plot.clear()
         plot.addItem(self.vline, ignoreBounds=True)
@@ -443,9 +443,9 @@ class ChartPanel(TerminalPanel):
         plot.setLabel("left", "MACD", color=MUTED)
 
 
-
+# 
 # Main window
-
+# 
 class StockResearchTerminal(QMainWindow):
     STATEMENTS = [("INCOME STATEMENT", "income"), ("BALANCE SHEET", "balance"), ("CASH FLOW", "cashflow")]
 
@@ -460,15 +460,15 @@ class StockResearchTerminal(QMainWindow):
         self.current_ticker = "AAPL"
         self.benchmark = self.settings.get("benchmark", DEFAULT_BENCHMARK)
 
-        self.bundle = None           
-        self.ctx = None             
-        self.fund_data = None       
+        self.bundle = None            
+        self.ctx = None          
+        self.fund_data = None        
         self.quotes = {}           
         self.quote_inflight = set()
         self.panels = []
 
         self._serial = itertools.count(1)
-        self._jobs = {}              
+        self._jobs = {}            
         self.research_serial = 0
         self.fund_serial = 0
         self.research_pool = QThreadPool()
@@ -489,7 +489,7 @@ class StockResearchTerminal(QMainWindow):
         self.refresh_quotes()
         self.load_ticker(self.current_ticker)
 
-    # settings 
+    #  settings 
     @staticmethod
     def load_settings():
         try:
@@ -513,7 +513,7 @@ class StockResearchTerminal(QMainWindow):
         except OSError:
             pass
 
-    #  styling 
+    # styling
     def apply_stylesheet(self):
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{ background-color: {BG}; color: {TEXT}; font-size: 11px; }}
@@ -543,7 +543,7 @@ class StockResearchTerminal(QMainWindow):
             QStatusBar {{ background: #090C10; color: {MUTED}; border-top: 1px solid {BORDER}; }}
         """)
 
-    #  UI 
+    #  UI construction 
     def build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
@@ -583,7 +583,7 @@ class StockResearchTerminal(QMainWindow):
         work_layout.addLayout(bottom)
         self.statusBar().showMessage("Ready · No order entry or portfolio tracking")
 
-        # Restore saved choices
+        # Restore saved choices 
         self.apply_saved_settings()
 
     def build_topbar(self):
@@ -742,7 +742,7 @@ class StockResearchTerminal(QMainWindow):
         panel.layout_box.addLayout(grid)
         return panel
 
-    # charts page 
+    #  charts 
     def build_charts_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -851,7 +851,7 @@ class StockResearchTerminal(QMainWindow):
         scroll.setWidget(inner)
         return scroll
 
-    # fundamentals page 
+    # fundamentals 
     def build_fundamentals_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -1003,7 +1003,7 @@ class StockResearchTerminal(QMainWindow):
     def pages_set_index(self, index):
         self.pages.setCurrentIndex(index)
 
-    #  background 
+    # background 
     def start_job(self, pool, kind, key, fn, *args):
         serial = next(self._serial)
         worker = Worker(fn, args, (kind, key, serial))
@@ -1044,13 +1044,13 @@ class StockResearchTerminal(QMainWindow):
         if not query:
             return
         ticker = query.upper()
-        
+
         if " " in query or len(query) > 6:
             self.status_text.setText(f"SEARCHING: {query}")
             QApplication.processEvents()
             try:
                 found = core.search_ticker(query)
-            except Exception as error:  
+            except Exception as error:  # noqa: BLE001
                 QMessageBox.warning(self, "Company search failed", str(error))
                 return
             if not found:
@@ -1226,11 +1226,11 @@ class StockResearchTerminal(QMainWindow):
             for name, fn in specs:
                 try:
                     text = fn(info)
-                except Exception:  
+                except Exception: 
                     text = "N/A"
                 self.metric_labels[(title, name)].setText(text)
 
-    #  chart workspace 
+    # chart 
     def rebuild_grid(self, name):
         preset = LAYOUTS[name]
         for panel in self.panels:
@@ -1298,7 +1298,7 @@ class StockResearchTerminal(QMainWindow):
         ), bench_full
 
     def render_view(self):
-        """Redraw everything that depends on period / chart options (no network)."""
+
         if not self.bundle:
             return
         self.ctx, bench_full = self.build_context()
@@ -1370,7 +1370,7 @@ class StockResearchTerminal(QMainWindow):
                 table.setItem(r, 2, right_item(fmt_pct(bench_ret, True), MUTED))
                 table.setItem(r, 3, right_item(fmt_pct(excess, True), GREEN if excess >= 0 else RED))
 
-    #  fundamental
+    # fundamentals 
     def render_fundamentals_view(self, *_):
         self.render_statement_table()
         self.render_fundamental_charts()
@@ -1451,7 +1451,7 @@ class StockResearchTerminal(QMainWindow):
             ocf = analysis.find_row(cash, "Operating Cash Flow")
             capex = analysis.find_row(cash, "Capital Expenditure")
             if ocf is not None and capex is not None:
-                fcf = ocf + capex      # Yahoo reports capex as a negative number
+                fcf = ocf + capex      
         if fcf is not None:
             fcf = fcf.reindex(income.columns)
 
@@ -1488,7 +1488,7 @@ class StockResearchTerminal(QMainWindow):
         if not drew:
             show_no_data(self.margin_chart, "MARGINS UNAVAILABLE")
 
-    #  watchlist and quotes
+    # watchlist 
     def populate_watchlist(self):
         self.watch_table.setRowCount(len(self.watchlist))
         for row, ticker in enumerate(self.watchlist):
