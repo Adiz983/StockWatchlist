@@ -5,12 +5,13 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
 import pyqtgraph as pg
-from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, QThreadPool, QTimer, Qt, Signal, Slot
-from PySide6.QtGui import QColor, QFont, QPainter, QPicture
+from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, QThreadPool, QTimer, Qt, QUrl, Signal, Slot
+from PySide6.QtGui import QColor, QDesktopServices, QFont, QPainter, QPicture
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QButtonGroup, QCheckBox, QComboBox, QFrame,
     QGridLayout, QHBoxLayout, QHeaderView, QInputDialog, QLabel, QLineEdit,
@@ -20,13 +21,15 @@ from PySide6.QtWidgets import (
 
 PROJECT_DIR = Path(__file__).resolve().parent
 os.chdir(PROJECT_DIR)
-import watchlist_core as core  
-import analysis  
-import data_service as ds  
+import watchlist_core as core  # noqa: E402  (must come after chdir so watchlist.json resolves)
+import analysis  # noqa: E402
+import data_service as ds  # noqa: E402
+import news  # noqa: E402
+import features_ui  # noqa: E402
 
 SETTINGS_FILE = PROJECT_DIR / "terminal_settings.json"
 
-
+# Bloomberg-inspired palette: low-glare charcoal, muted labels, restrained amber.
 BG = "#080A0D"
 PANEL = "#0D1117"
 PANEL2 = "#111821"
@@ -40,11 +43,14 @@ BLUE = "#72A7D8"
 PURPLE = "#B07CE8"
 
 MA_COLORS = {20: AMBER, 50: BLUE, 200: PURPLE}
-MAX_CANDLES = 1500          
+MAX_CANDLES = 1500          # beyond this, candles are unreadable and slow -> line
 QUOTE_REFRESH_MS = 60_000
+NEWS_REFRESH_MS = 5 * 60_000
+MARKET_SYMBOLS = ["^GSPC", "SPY", "QQQ"]   # feeds used for general market headlines
+NEWS_HILITE = "#1B1609"                    # row tint for stories about your watchlist
 DEFAULT_BENCHMARK = "SPY"
 
-
+# name -> (cells, row stretches, column stretches); a cell is (kind, row, col, rowspan, colspan)
 LAYOUTS = {
     "RESEARCH · 5 PANELS": {
         "cells": [("PRICE", 0, 0, 2, 1), ("RELATIVE", 0, 1, 1, 1), ("VOLUME", 1, 1, 1, 1),
@@ -79,9 +85,9 @@ KIND_LABELS = {
 }
 
 
-
+# --------------------------------------------------------------------------
 # Formatting helpers
-
+# --------------------------------------------------------------------------
 def val_num(value):
     try:
         if value is None:
@@ -168,9 +174,9 @@ def tone_color(tone):
     return {"up": GREEN, "down": RED}.get(tone, TEXT)
 
 
-
+# --------------------------------------------------------------------------
 # Background work
-
+# --------------------------------------------------------------------------
 class WorkerSignals(QObject):
     done = Signal(object, object)    # token, result
     failed = Signal(object, str)     # token, message
@@ -194,9 +200,9 @@ class Worker(QRunnable):
         self.signals.done.emit(self.token, result)
 
 
-
-# Chart
-
+# --------------------------------------------------------------------------
+# Chart building blocks
+# --------------------------------------------------------------------------
 class IndexDateAxis(pg.AxisItem):
     """Bottom axis for charts plotted by bar index; labels show session dates,
     which keeps weekends/holidays from leaving gaps between candles."""
@@ -252,8 +258,8 @@ class CandlestickItem(pg.GraphicsObject):
 class ChartContext:
     ticker: str
     benchmark: str
-    view: pd.DataFrame            
-    bench: pd.Series | None       
+    view: pd.DataFrame            # period-sliced OHLCV + indicators
+    bench: pd.Series | None       # benchmark closes aligned to view.index
     bench_error: str | None
     candles: bool
     mas: dict
@@ -290,7 +296,7 @@ def style_chart(chart):
 def add_legend(chart):
     try:
         return chart.addLegend(offset=(8, 6), labelTextColor=TEXT)
-    except TypeError:  
+    except TypeError:  # older pyqtgraph without labelTextColor
         return chart.addLegend(offset=(8, 6))
 
 
@@ -305,8 +311,8 @@ def show_no_data(chart, message):
 class ChartPanel(TerminalPanel):
     """One cell of the chart grid. The dropdown picks what it displays."""
 
-    kind_changed = Signal(object)   
-    hovered = Signal(int)           
+    kind_changed = Signal(object)   # emits the panel itself
+    hovered = Signal(int)           # bar index under the cursor
 
     def __init__(self, kind):
         super().__init__(KIND_LABELS[kind])
@@ -324,7 +330,7 @@ class ChartPanel(TerminalPanel):
         self.axis = IndexDateAxis(orientation="bottom")
         self.plot = pg.PlotWidget(axisItems={"bottom": self.axis})
         style_chart(self.plot)
-        self.plot.getAxis("left").setWidth(62)   
+        self.plot.getAxis("left").setWidth(62)   # keeps stacked panels visually aligned
         add_legend(self.plot)
         self.vline = pg.InfiniteLine(angle=90, movable=False,
                                      pen=pg.mkPen(MUTED, width=1, style=Qt.PenStyle.DashLine))
@@ -342,7 +348,7 @@ class ChartPanel(TerminalPanel):
         if vb.sceneBoundingRect().contains(pos):
             self.hovered.emit(int(round(vb.mapSceneToView(pos).x())))
 
-    #  rendering 
+    # -- rendering -------------------------------------------------------
     def render(self, ctx):
         plot = self.plot
         plot.clear()
@@ -443,9 +449,9 @@ class ChartPanel(TerminalPanel):
         plot.setLabel("left", "MACD", color=MUTED)
 
 
-# 
+# --------------------------------------------------------------------------
 # Main window
-# 
+# --------------------------------------------------------------------------
 class StockResearchTerminal(QMainWindow):
     STATEMENTS = [("INCOME STATEMENT", "income"), ("BALANCE SHEET", "balance"), ("CASH FLOW", "cashflow")]
 
@@ -460,21 +466,36 @@ class StockResearchTerminal(QMainWindow):
         self.current_ticker = "AAPL"
         self.benchmark = self.settings.get("benchmark", DEFAULT_BENCHMARK)
 
-        self.bundle = None            
-        self.ctx = None          
-        self.fund_data = None        
-        self.quotes = {}           
+        self.bundle = None            # latest research bundle for current_ticker
+        self.ctx = None               # latest ChartContext
+        self.fund_data = None         # latest fundamentals for current_ticker
+        self.quotes = {}              # symbol -> ds.Quote
         self.quote_inflight = set()
         self.panels = []
 
+        self.news_by_symbol = {}      # symbol -> [NewsItem]
+        self.news_items = []          # merged, de-duplicated feed
+        self.news_rows = []           # what the table currently shows
+        self.news_inflight = set()
+        self.news_errors = {}
+        self.news_known = set()       # story keys seen in earlier refreshes
+        self.news_new = set()         # keys that arrived in the latest refresh
+        self.news_primed = False      # first successful load never flags NEW
+        self.news_silent = set()      # newly added symbols: load quietly, no NEW flags
+
         self._serial = itertools.count(1)
-        self._jobs = {}            
+        self._jobs = {}               # serial -> Worker (keeps them alive until done)
         self.research_serial = 0
         self.fund_serial = 0
         self.research_pool = QThreadPool()
         self.research_pool.setMaxThreadCount(2)
         self.quote_pool = QThreadPool()
         self.quote_pool.setMaxThreadCount(6)
+        self.news_pool = QThreadPool()
+        self.news_pool.setMaxThreadCount(4)
+        self.feature_pool = QThreadPool()      # compare / backtest / assistant jobs
+        self.feature_pool.setMaxThreadCount(3)
+        self.job_handlers = {}                 # kind -> (on_done(serial, key, result), on_fail(serial, key, msg))
 
         self.apply_stylesheet()
         self.build_ui()
@@ -485,11 +506,18 @@ class StockResearchTerminal(QMainWindow):
         if self.auto_refresh.isChecked():
             self.quote_timer.start()
 
+        self.news_timer = QTimer(self)
+        self.news_timer.setInterval(NEWS_REFRESH_MS)
+        self.news_timer.timeout.connect(self.refresh_news)
+        if self.news_auto.isChecked():
+            self.news_timer.start()
+
         self.populate_watchlist()
         self.refresh_quotes()
+        self.refresh_news()
         self.load_ticker(self.current_ticker)
 
-    #  settings 
+    # -- settings --------------------------------------------------------
     @staticmethod
     def load_settings():
         try:
@@ -513,7 +541,7 @@ class StockResearchTerminal(QMainWindow):
         except OSError:
             pass
 
-    # styling
+    # -- styling ---------------------------------------------------------
     def apply_stylesheet(self):
         self.setStyleSheet(f"""
             QMainWindow, QWidget {{ background-color: {BG}; color: {TEXT}; font-size: 11px; }}
@@ -543,7 +571,7 @@ class StockResearchTerminal(QMainWindow):
             QStatusBar {{ background: #090C10; color: {MUTED}; border-top: 1px solid {BORDER}; }}
         """)
 
-    #  UI construction 
+    # -- UI construction -------------------------------------------------
     def build_ui(self):
         root = QWidget()
         self.setCentralWidget(root)
@@ -570,6 +598,8 @@ class StockResearchTerminal(QMainWindow):
         self.pages = QStackedWidget()
         self.pages.addWidget(self.build_charts_page())
         self.pages.addWidget(self.build_fundamentals_page())
+        self.pages.addWidget(self.build_news_page())
+        self.build_feature_pages()
         work_layout.addWidget(self.pages, 1)
 
         bottom = QHBoxLayout()
@@ -583,7 +613,7 @@ class StockResearchTerminal(QMainWindow):
         work_layout.addLayout(bottom)
         self.statusBar().showMessage("Ready · No order entry or portfolio tracking")
 
-        # Restore saved choices 
+        # Restore saved choices (after widgets exist, before first render).
         self.apply_saved_settings()
 
     def build_topbar(self):
@@ -636,8 +666,11 @@ class StockResearchTerminal(QMainWindow):
 
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
-        for index, text in enumerate(("RESEARCH OVERVIEW", "FINANCIALS")):
+        for index, text in enumerate(("RESEARCH OVERVIEW", "FINANCIALS", "NEWS FEED",
+                                      "COMPARE STOCKS", "STRATEGY BACKTEST", "AI RESEARCH ASSISTANT")):
             btn = QPushButton("▸  " + text)
+            if index == 2:
+                self.news_button = btn
             btn.setObjectName("railButton")
             btn.setCheckable(True)
             btn.setChecked(index == 0)
@@ -742,7 +775,7 @@ class StockResearchTerminal(QMainWindow):
         panel.layout_box.addLayout(grid)
         return panel
 
-    #  charts 
+    # ---- charts page ----
     def build_charts_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -851,7 +884,7 @@ class StockResearchTerminal(QMainWindow):
         scroll.setWidget(inner)
         return scroll
 
-    # fundamentals 
+    # ---- fundamentals page ----
     def build_fundamentals_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -999,11 +1032,31 @@ class StockResearchTerminal(QMainWindow):
             widget.blockSignals(False)
         self.rebuild_grid(layout_name)
 
-    # navigation 
+    # -- navigation ------------------------------------------------------
     def pages_set_index(self, index):
         self.pages.setCurrentIndex(index)
+        self.update_news_badge()
+        page = self.pages.currentWidget()
+        if hasattr(page, "prefill"):
+            page.prefill()
+        if page is getattr(self, "assistant_page", None):
+            page.refresh_context()
 
-    # background 
+    def build_feature_pages(self):
+        ui = SimpleNamespace(
+            TerminalPanel=TerminalPanel, IndexDateAxis=IndexDateAxis, style_chart=style_chart,
+            add_legend=add_legend, show_no_data=show_no_data,
+            AMBER=AMBER, BLUE=BLUE, GREEN=GREEN, PURPLE=PURPLE, RED=RED,
+            TEXT=TEXT, MUTED=MUTED, PANEL=PANEL, BORDER=BORDER)
+        self.compare_page = features_ui.ComparePage(self, ui)
+        self.backtest_page = features_ui.BacktestPage(self, ui)
+        self.assistant_page = features_ui.AssistantPage(self, ui)
+        for kind, page in (("compare", self.compare_page), ("backtest", self.backtest_page),
+                           ("assistant", self.assistant_page)):
+            self.job_handlers[kind] = (page.handle_result, page.handle_error)
+            self.pages.addWidget(page)
+
+    # -- background jobs -------------------------------------------------
     def start_job(self, pool, kind, key, fn, *args):
         serial = next(self._serial)
         worker = Worker(fn, args, (kind, key, serial))
@@ -1023,6 +1076,10 @@ class StockResearchTerminal(QMainWindow):
             self.handle_fundamentals(serial, key, result)
         elif kind == "quote":
             self.handle_quote(key, result)
+        elif kind == "news":
+            self.handle_news(key, result)
+        elif kind in self.job_handlers:
+            self.job_handlers[kind][0](serial, key, result)
 
     @Slot(object, str)
     def on_job_failed(self, token, message):
@@ -1037,14 +1094,18 @@ class StockResearchTerminal(QMainWindow):
                 self.render_fundamentals_view()
         elif kind == "quote":
             self.handle_quote(key, ds.Quote(key, error=message))
+        elif kind == "news":
+            self.handle_news_error(key, message)
+        elif kind in self.job_handlers:
+            self.job_handlers[kind][1](serial, key, message)
 
-    #  loading a ticker 
+    # -- loading a ticker ------------------------------------------------
     def load_ticker_from_search(self):
         query = self.search_box.text().strip()
         if not query:
             return
         ticker = query.upper()
-
+        # If it looks like a symbol, use it directly; otherwise use existing Alpha Vantage search.
         if " " in query or len(query) > 6:
             self.status_text.setText(f"SEARCHING: {query}")
             QApplication.processEvents()
@@ -1084,7 +1145,7 @@ class StockResearchTerminal(QMainWindow):
 
     def handle_research(self, serial, ticker, bundle):
         if serial != self.research_serial:
-            return  
+            return  # a newer load superseded this one
         self.bundle = bundle
         self.apply_bundle()
         self.render_view()
@@ -1092,6 +1153,7 @@ class StockResearchTerminal(QMainWindow):
         self.clock_status.setText("● DATA RECEIVED")
         self.clock_status.setStyleSheet(f"color: {GREEN}; font-weight: 800;")
         self.status_text.setText(f"{ticker} LOADED · {len(self.ctx.view)} SESSIONS IN VIEW · {len(frame)} IN HISTORY")
+        self.assistant_page.refresh_context()
 
     def handle_research_error(self, serial, ticker, message):
         if serial != self.research_serial:
@@ -1116,13 +1178,14 @@ class StockResearchTerminal(QMainWindow):
         else:
             self.fund_status.setText(f"{ticker} · FINANCIALS LOADED" + (f" · {problems} PARTIAL ERROR(S)" if problems else ""))
         self.render_fundamentals_view()
+        self.assistant_page.refresh_context()
 
     def refresh_all(self):
         ds.clear_cache()
         self.refresh_quotes()
         self.load_ticker(self.current_ticker, force=True)
 
-    #  header 
+    # -- header / stats / profile ---------------------------------------
     def apply_bundle(self):
         info, frame = self.bundle["info"], self.bundle["frame"]
         self.update_quote(info, frame)
@@ -1226,11 +1289,11 @@ class StockResearchTerminal(QMainWindow):
             for name, fn in specs:
                 try:
                     text = fn(info)
-                except Exception: 
+                except Exception:  # noqa: BLE001 - one bad field must not blank the card
                     text = "N/A"
                 self.metric_labels[(title, name)].setText(text)
 
-    # chart 
+    # -- chart workspace -------------------------------------------------
     def rebuild_grid(self, name):
         preset = LAYOUTS[name]
         for panel in self.panels:
@@ -1298,7 +1361,7 @@ class StockResearchTerminal(QMainWindow):
         ), bench_full
 
     def render_view(self):
-
+        """Redraw everything that depends on period / chart options (no network)."""
         if not self.bundle:
             return
         self.ctx, bench_full = self.build_context()
@@ -1370,7 +1433,7 @@ class StockResearchTerminal(QMainWindow):
                 table.setItem(r, 2, right_item(fmt_pct(bench_ret, True), MUTED))
                 table.setItem(r, 3, right_item(fmt_pct(excess, True), GREEN if excess >= 0 else RED))
 
-    # fundamentals 
+    # -- fundamentals view ----------------------------------------------
     def render_fundamentals_view(self, *_):
         self.render_statement_table()
         self.render_fundamental_charts()
@@ -1451,7 +1514,7 @@ class StockResearchTerminal(QMainWindow):
             ocf = analysis.find_row(cash, "Operating Cash Flow")
             capex = analysis.find_row(cash, "Capital Expenditure")
             if ocf is not None and capex is not None:
-                fcf = ocf + capex      
+                fcf = ocf + capex      # Yahoo reports capex as a negative number
         if fcf is not None:
             fcf = fcf.reindex(income.columns)
 
@@ -1488,7 +1551,238 @@ class StockResearchTerminal(QMainWindow):
         if not drew:
             show_no_data(self.margin_chart, "MARGINS UNAVAILABLE")
 
-    # watchlist 
+    # ---- news page ----
+    def build_news_page(self):
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+
+        bar = QHBoxLayout()
+        bar.setSpacing(8)
+        self.news_filter = QComboBox()
+        self.news_filter.addItems(["ALL NEWS", "MY WATCHLIST", "MARKET"])
+        self.news_filter.currentIndexChanged.connect(self.render_news)
+        bar.addWidget(self.news_filter)
+        self.news_search = QLineEdit()
+        self.news_search.setPlaceholderText("Filter headlines or tickers…")
+        self.news_search.setMaximumWidth(280)
+        self.news_search.textChanged.connect(self.render_news)
+        bar.addWidget(self.news_search)
+        self.news_auto = QCheckBox("AUTO 5m")
+        self.news_auto.setChecked(True)
+        self.news_auto.toggled.connect(self.on_news_auto_toggled)
+        bar.addWidget(self.news_auto)
+        refresh = QPushButton("⟳  REFRESH NEWS")
+        refresh.clicked.connect(lambda: self.refresh_news())
+        bar.addWidget(refresh)
+        legend = QLabel(f'<span style="color:{AMBER}">■</span> highlighted = on your watchlist'
+                        f'&nbsp;&nbsp;<span style="color:{AMBER}">●</span> new since last refresh')
+        legend.setObjectName("muted")
+        bar.addWidget(legend)
+        bar.addStretch()
+        self.news_status = QLabel("LOADING NEWS…")
+        self.news_status.setObjectName("muted")
+        bar.addWidget(self.news_status)
+        layout.addLayout(bar)
+
+        split = QSplitter(Qt.Orientation.Vertical)
+        split.setChildrenCollapsible(False)
+        feed_panel = TerminalPanel("LIVE NEWS FEED")
+        self.news_table = QTableWidget(0, 4)
+        self.news_table.setHorizontalHeaderLabels(["AGE", "TICKERS", "HEADLINE", "SOURCE"])
+        self.news_table.verticalHeader().setVisible(False)
+        self.news_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.news_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.news_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.news_table.setShowGrid(False)
+        self.news_table.setWordWrap(False)
+        hh = self.news_table.horizontalHeader()
+        hh.setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.news_table.itemSelectionChanged.connect(self.on_news_selected)
+        self.news_table.cellDoubleClicked.connect(lambda row, _col: self.open_news_row(row))
+        feed_panel.layout_box.addWidget(self.news_table, 1)
+        split.addWidget(feed_panel)
+
+        detail = TerminalPanel("ARTICLE")
+        self.news_title = QLabel("Select a headline")
+        self.news_title.setWordWrap(True)
+        self.news_title.setStyleSheet("font-size: 14px; font-weight: 800;")
+        self.news_meta = QLabel("")
+        self.news_meta.setObjectName("muted")
+        self.news_summary = QLabel("")
+        self.news_summary.setWordWrap(True)
+        self.news_summary.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.news_open_btn = QPushButton("OPEN ARTICLE IN BROWSER")
+        self.news_open_btn.setObjectName("accent")
+        self.news_open_btn.setEnabled(False)
+        self.news_open_btn.clicked.connect(lambda: self.open_news_row(self.news_table.currentRow()))
+        detail.layout_box.addWidget(self.news_title)
+        detail.layout_box.addWidget(self.news_meta)
+        detail.layout_box.addWidget(self.news_summary, 1)
+        detail.layout_box.addWidget(self.news_open_btn, 0, Qt.AlignmentFlag.AlignLeft)
+        split.addWidget(detail)
+        split.setSizes([620, 190])
+        layout.addWidget(split, 1)
+        return page
+
+    def refresh_news(self, symbols=None):
+        """Fetch headlines for every watchlist symbol plus the market feeds."""
+        if not isinstance(symbols, (list, tuple)):
+            symbols = list(dict.fromkeys(list(self.watchlist) + MARKET_SYMBOLS))
+        for symbol in symbols:
+            if symbol in self.news_inflight:
+                continue
+            self.news_inflight.add(symbol)
+            self.start_job(self.news_pool, "news", symbol, news.fetch_news, symbol)
+        if self.news_inflight:
+            self.news_status.setText("REFRESHING…")
+
+    def handle_news(self, symbol, items):
+        self.news_inflight.discard(symbol)
+        self.news_errors.pop(symbol, None)
+        self.news_by_symbol[symbol] = items
+        if symbol in self.news_silent:
+            # A freshly added ticker: its backlog is not "new" news.
+            self.news_silent.discard(symbol)
+            self.news_known |= {item.key for item in items}
+        self.rebuild_news()
+        if not self.news_inflight:
+            self.finish_news_cycle()
+
+    def handle_news_error(self, symbol, message):
+        self.news_inflight.discard(symbol)
+        self.news_errors[symbol] = message
+        self.news_silent.discard(symbol)
+        if not self.news_inflight:
+            self.finish_news_cycle()
+
+    def rebuild_news(self):
+        self.news_items = news.merge_news(
+            self.news_by_symbol, set(self.watchlist), set(MARKET_SYMBOLS))
+        self.render_news()
+
+    def finish_news_cycle(self):
+        keys = {item.key for item in self.news_items}
+        self.news_new = (keys - self.news_known) if self.news_primed else set()
+        if keys:
+            self.news_primed = True
+        self.news_known |= keys
+        self.update_news_badge()
+        self.render_news()
+
+    def update_news_badge(self):
+        count = len(self.news_new) if self.pages.currentIndex() != 2 else 0
+        self.news_button.setText("▸  NEWS FEED" + (f"  ({count} NEW)" if count else ""))
+
+    def render_news(self, *_):
+        mode = self.news_filter.currentIndex()
+        query = self.news_search.text().strip().lower()
+        selected = self.news_rows[self.news_table.currentRow()].key \
+            if 0 <= self.news_table.currentRow() < len(self.news_rows) else None
+        rows = []
+        for item in self.news_items:
+            if mode == 1 and not item.tickers:
+                continue
+            if mode == 2 and not item.market:
+                continue
+            if query and query not in f"{item.title} {item.summary} {' '.join(item.tickers)}".lower():
+                continue
+            rows.append(item)
+        self.news_rows = rows
+
+        table = self.news_table
+        table.blockSignals(True)
+        table.setRowCount(len(rows))
+        restore = -1
+        for r, item in enumerate(rows):
+            on_watchlist = bool(item.tickers)
+            labels = sorted(item.tickers) + (["MKT"] if item.market else [])
+            age = ("● " if item.key in self.news_new else "") + news.format_age(item.published)
+            cells = [
+                QTableWidgetItem(age),
+                QTableWidgetItem(", ".join(labels)),
+                QTableWidgetItem(item.title),
+                QTableWidgetItem(item.publisher or "—"),
+            ]
+            cells[0].setForeground(QColor(AMBER if item.key in self.news_new else MUTED))
+            cells[1].setForeground(QColor(AMBER if on_watchlist else MUTED))
+            cells[3].setForeground(QColor(MUTED))
+            if item.published:
+                cells[0].setToolTip(item.published.astimezone().strftime("%a %d %b %Y  %H:%M"))
+            cells[2].setToolTip(item.summary[:400] if item.summary else item.title)
+            if on_watchlist:
+                for cell in (cells[1], cells[2]):
+                    font = cell.font()
+                    font.setBold(True)
+                    cell.setFont(font)
+            for c, cell in enumerate(cells):
+                if on_watchlist:
+                    cell.setBackground(QColor(NEWS_HILITE))
+                table.setItem(r, c, cell)
+            if item.key == selected:
+                restore = r
+        if restore >= 0:
+            table.selectRow(restore)
+        table.blockSignals(False)
+        self.on_news_selected()
+
+        failed = len(self.news_errors)
+        status = f"{len(rows)} OF {len(self.news_items)} ARTICLES · {len(self.news_new)} NEW"
+        if self.news_inflight:
+            status = "REFRESHING… · " + status
+        else:
+            status = f"UPDATED {time.strftime('%H:%M:%S')} · " + status
+        if failed:
+            status += f" · {failed} SOURCE(S) FAILED"
+        self.news_status.setText(status)
+        self.news_status.setToolTip(
+            "\n".join(f"{sym}: {msg}" for sym, msg in self.news_errors.items())[:1500])
+        if not rows and not self.news_inflight:
+            if self.news_errors:
+                first_sym, first_msg = next(iter(self.news_errors.items()))
+                self.news_title.setText("No news could be loaded")
+                self.news_meta.setText(f"{first_sym}: {first_msg}"[:300])
+                self.news_summary.setText("Hover the status text (top right) for every error. "
+                                          "If it mentions rate limits, wait a few minutes and refresh.")
+            elif self.news_primed or not self.news_items:
+                self.news_title.setText("No articles match")
+                self.news_meta.setText("The sources returned no headlines, or your filter hides them all.")
+                self.news_summary.setText("")
+
+    def on_news_selected(self):
+        row = self.news_table.currentRow()
+        if not 0 <= row < len(self.news_rows):
+            self.news_title.setText("Select a headline")
+            self.news_meta.setText("")
+            self.news_summary.setText("")
+            self.news_open_btn.setEnabled(False)
+            return
+        item = self.news_rows[row]
+        parts = [item.publisher or "Unknown source"]
+        if item.published:
+            parts.append(item.published.astimezone().strftime("%a %d %b %Y  %H:%M"))
+        tags = sorted(item.tickers) + (["MARKET"] if item.market else [])
+        if tags:
+            parts.append(", ".join(tags))
+        self.news_title.setText(item.title)
+        self.news_meta.setText("  ·  ".join(parts))
+        self.news_summary.setText(item.summary or "No summary provided. Open the article for the full story.")
+        self.news_open_btn.setEnabled(bool(item.url))
+
+    def open_news_row(self, row):
+        if 0 <= row < len(self.news_rows) and self.news_rows[row].url:
+            QDesktopServices.openUrl(QUrl(self.news_rows[row].url))
+
+    def on_news_auto_toggled(self, checked):
+        if checked:
+            self.news_timer.start()
+            self.refresh_news()
+        else:
+            self.news_timer.stop()
+
+    # -- watchlist & quotes ---------------------------------------------
     def populate_watchlist(self):
         self.watch_table.setRowCount(len(self.watchlist))
         for row, ticker in enumerate(self.watchlist):
@@ -1579,6 +1873,8 @@ class StockResearchTerminal(QMainWindow):
         core.save_watchlist(self.watchlist)
         self.populate_watchlist()
         self.refresh_quotes([ticker])
+        self.news_silent.add(ticker)
+        self.refresh_news([ticker])
         self.status_text.setText(f"ADDED {ticker} TO WATCHLIST")
 
     def remove_ticker(self):
@@ -1592,16 +1888,23 @@ class StockResearchTerminal(QMainWindow):
         ticker = item.text()
         self.watchlist = [symbol for symbol in self.watchlist if symbol != ticker]
         self.quotes.pop(ticker, None)
+        self.news_by_symbol.pop(ticker, None)
+        self.rebuild_news()
         core.save_watchlist(self.watchlist)
         self.populate_watchlist()
         self.status_text.setText(f"REMOVED {ticker} FROM WATCHLIST")
 
     def closeEvent(self, event):
         self.quote_timer.stop()
+        self.news_timer.stop()
         self.quote_pool.clear()
         self.research_pool.clear()
+        self.news_pool.clear()
+        self.feature_pool.clear()
         self.quote_pool.waitForDone(1500)
         self.research_pool.waitForDone(1500)
+        self.news_pool.waitForDone(1500)
+        self.feature_pool.waitForDone(1500)
         super().closeEvent(event)
 
 

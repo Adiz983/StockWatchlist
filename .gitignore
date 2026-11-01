@@ -1,25 +1,22 @@
-
-# Python
-__pycache__/
-*.py[cod]
-.venv/
-venv/
-
-# Secrets
+# Secrets: never commit these
+gemini_key.txt
 .env
-.env.*
-!.env.example
+*.key
 
-# Local portfolio data
-portfolio.json
-watchlist.json
+# Personal data created by the app
+saved_analysis.json
 
-# Editor and operating system files
+# Backups and Python junk
+*.bak
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# Editor / OS
 .vscode/
+.idea/
 .DS_Store
 Thumbs.db
-
-# Build files
-build/
-dist/
-*.spec
+portfolio.json
+terminal_settings.json

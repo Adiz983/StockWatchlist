@@ -1,4 +1,4 @@
-"""Watchlist storage and company search (replaces the parts of main.py the terminal used)."""
+
 import json
 import os
 from pathlib import Path

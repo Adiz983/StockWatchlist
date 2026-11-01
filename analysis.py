@@ -1,7 +1,4 @@
-"""Pure calculation helpers: indicators, period slicing, signals, statements.
 
-Nothing in here touches Qt or the network, so it can be unit-tested on its own.
-"""
 from __future__ import annotations
 
 import numpy as np
@@ -71,7 +68,11 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
 
 
 
+
 # Period slicing / relative performance
+
+# relative performance
+ 1122525 (Add stock comparison, strategy backtester and AI research assistant)
 
 def slice_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
     if df is None or df.empty or period == "max":
@@ -159,6 +160,9 @@ def trailing_returns(close: pd.Series, bench: pd.Series | None, selected_period:
 
 
 
+
+#  signal
+ 1122525 (Add stock comparison, strategy backtester and AI research assistant)
 
 def technical_snapshot(df: pd.DataFrame):
     """List of (label, text, tone) where tone is 'up', 'down' or 'flat'."""
@@ -287,7 +291,7 @@ def statement_table(df: pd.DataFrame, kind: str, show_all: bool, quarterly: bool
         if not labels:
             labels = list(df.index[:15])
     for label in labels:
-        style = row_style(label)
+        style = row_style(label)	
         rows.append((label, [df.at[label, c] for c in cols], style))
     if kind == "income":
         for label, series in derived_income_rows(df, quarterly):
