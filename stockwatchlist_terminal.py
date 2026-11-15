@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 
 PROJECT_DIR = Path(__file__).resolve().parent
 os.chdir(PROJECT_DIR)
+sys.path.insert(0, str(PROJECT_DIR))  # <-- ADD THIS LINE
 import watchlist_core as core  # noqa: E402  (must come after chdir so watchlist.json resolves)
 import analysis  # noqa: E402
 import data_service as ds  # noqa: E402
